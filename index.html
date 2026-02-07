@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MMA AI Coach – Fullscreen Fix</title>
+<title>MMA AI Coach + Fight</title>
 
-<!-- ספריות Three.js + TensorFlow.js -->
+<!-- ספריות -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/examples/js/controls/OrbitControls.js"></script>
@@ -26,6 +26,7 @@ canvas, video { position:absolute; top:0; left:0; width:100%; height:100%; objec
 }
 button { margin:2px; padding:5px; border:none; border-radius:5px; cursor:pointer; background:#222; color:#fff;}
 button:hover { background:#444; }
+#videoElement { width:200px; height:150px; bottom:10px; right:10px; position:absolute; z-index:5; border:2px solid #fff; }
 </style>
 </head>
 <body>
@@ -36,7 +37,6 @@ button:hover { background:#444; }
 קומבואים: <span id="combo">0</span><br>
 מהירות: <span id="speed">0</span><br>
 כוח: <span id="power">0</span><br>
-זווית: <span id="angle">0</span><br>
 דיוק: <span id="accuracy">0%</span><br>
 חיי האויב: <span id="enemyHealth">100</span><br>
 רמת קושי: <span id="difficultyLevel">1</span>
@@ -50,7 +50,7 @@ button:hover { background:#444; }
 <button onclick="setDifficulty(3)">קשה</button>
 </div>
 
-<video id="videoElement" autoplay playsinline></video>
+<video id="videoElement" autoplay playsinline muted></video>
 
 <script>
 // =================== הגדרות מצב ===================
@@ -63,10 +63,11 @@ function setMode(newMode){
     resetStats();
 
     if(mode==='coach'){
-        document.getElementById('videoElement').style.display='block';
+        video.style.display='block';
         canvas3D.style.display='none';
+        if(!poseRunning) startPoseDetection();
     } else {
-        document.getElementById('videoElement').style.display='none';
+        video.style.display='block'; // מצלמה קטנה לצד
         canvas3D.style.display='block';
     }
 }
@@ -77,11 +78,11 @@ function setDifficulty(level){
 }
 
 // =================== סטטיסטיקות ===================
-let stats = {combo:0, speed:0, power:0, angle:0, accuracy:0};
+let stats = {combo:0, speed:0, power:0, accuracy:0};
 let enemyHealth = 100;
 
 function resetStats(){
-    stats={combo:0, speed:0, power:0, angle:0, accuracy:0};
+    stats={combo:0, speed:0, power:0, accuracy:0};
     enemyHealth=100;
     updateHUD();
 }
@@ -90,7 +91,6 @@ function updateHUD(){
     document.getElementById('combo').innerText = stats.combo;
     document.getElementById('speed').innerText = stats.speed.toFixed(1);
     document.getElementById('power').innerText = stats.power.toFixed(1);
-    document.getElementById('angle').innerText = stats.angle.toFixed(1);
     document.getElementById('accuracy').innerText = stats.accuracy.toFixed(1)+'%';
     document.getElementById('enemyHealth').innerText = enemyHealth.toFixed(0);
 }
@@ -98,6 +98,7 @@ function updateHUD(){
 // =================== מצלמה + Pose Detection ===================
 let video = document.getElementById('videoElement');
 let detector;
+let poseRunning = false;
 
 async function initCamera(){
     const stream = await navigator.mediaDevices.getUserMedia({video:true, audio:false});
@@ -109,38 +110,42 @@ async function initDetector(){
     detector = await poseDetection.createDetector(model, {modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING});
 }
 
+async function startPoseDetection(){
+    if(poseRunning) return;
+    poseRunning = true;
+    await initCamera();
+    await initDetector();
+    detectPose();
+}
+
 function calculateStats(keypoints){
-    let speed=0,power=0;
+    let speed=0;
     const rightWrist=keypoints.find(p=>p.name==='right_wrist');
     const leftWrist=keypoints.find(p=>p.name==='left_wrist');
 
-    if(rightWrist && leftWrist){
-        if(rightWrist.lastPos){
-            const dx=rightWrist.x-rightWrist.lastPos.x;
-            const dy=rightWrist.y-rightWrist.lastPos.y;
-            speed=Math.sqrt(dx*dx+dy*dy)*30;
-        }
-        rightWrist.lastPos={x:rightWrist.x, y:rightWrist.y};
-
-        if(leftWrist.lastPos){
-            const dx=leftWrist.x-leftWrist.lastPos.x;
-            const dy=leftWrist.y-leftWrist.lastPos.y;
-            speed += Math.sqrt(dx*dx+dy*dy)*30;
-        }
-        leftWrist.lastPos={x:leftWrist.x, y:leftWrist.y};
+    if(rightWrist && rightWrist.lastPos){
+        const dx=rightWrist.x-rightWrist.lastPos.x;
+        const dy=rightWrist.y-rightWrist.lastPos.y;
+        speed=Math.sqrt(dx*dx+dy*dy)*30;
     }
+    if(rightWrist) rightWrist.lastPos={x:rightWrist.x, y:rightWrist.y};
 
-    power = speed*0.8;
+    if(leftWrist && leftWrist.lastPos){
+        const dx=leftWrist.x-leftWrist.lastPos.x;
+        const dy=leftWrist.y-leftWrist.lastPos.y;
+        speed += Math.sqrt(dx*dx+dy*dy)*30;
+    }
+    if(leftWrist) leftWrist.lastPos={x:leftWrist.x, y:leftWrist.y};
+
     stats.speed = speed;
-    stats.power = power;
-    stats.angle = 90;
-    stats.accuracy = Math.min(100,(speed+power)/5);
+    stats.power = speed*0.8;
+    stats.accuracy = Math.min(100,(speed*0.8));
     if(speed>15) stats.combo++;
     updateHUD();
 }
 
 async function detectPose(){
-    if(!detector || !video || mode!=='coach') return;
+    if(!detector || mode!=='coach') return;
     const poses = await detector.estimatePoses(video);
     if(poses.length>0){
         const keypoints = poses[0].keypoints.map((kp,i)=>({...kp,name:kp.name||poseDetection.keypoints[i].name}));
@@ -148,14 +153,6 @@ async function detectPose(){
     }
     requestAnimationFrame(detectPose);
 }
-
-async function startAI(){
-    await initCamera();
-    await initDetector();
-    detectPose();
-}
-
-startAI();
 
 // =================== דמות 3D ===================
 let scene, camera3D, renderer, clock, mixer, character;
@@ -212,7 +209,6 @@ function fightAI(){
         playAction('Punch');
         enemyHealth -= stats.power*0.5*difficulty;
         enemyHealth=Math.max(0,enemyHealth);
-        playHitSound();
     }
     updateHUD();
 }
@@ -242,14 +238,6 @@ animate3D();
 // =================== סאונד ===================
 let hitSound=new Audio('https://www.soundjay.com/human/sounds/punch-01.mp3');
 function playHitSound(){ hitSound.play(); }
-
-// =================== שמירת אימונים ===================
-function saveHistory(){
-    let history=JSON.parse(localStorage.getItem('mmaHistory')||"[]");
-    history.push({...stats,date:new Date().toISOString()});
-    localStorage.setItem('mmaHistory',JSON.stringify(history));
-}
-setInterval(saveHistory,10000);
 
 </script>
 </body>
